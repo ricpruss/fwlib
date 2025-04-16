@@ -1,5 +1,7 @@
 #include <Python.h>
 #include "fwlib32.h"
+#include <stdlib.h> // Added for malloc/free
+#include <string.h> // Added for memcpy/memset
 
 #ifdef _MSC_VER
 #pragma pack(push, 4)
@@ -342,6 +344,135 @@ static PyObject* Context_read_pmc_bit(Context* self, PyObject* args) {
     return PyBool_FromLong(bit_value);
 }
 
+static PyObject* Context_write_pmc(Context* self, PyObject* args) {
+    short adr_type, data_type;
+    unsigned short start_num, end_num;
+    PyObject* data_list; // Python list/tuple containing data to write
+
+    // Parse arguments: adr_type, data_type, start_num, end_num, data_list
+    if (!PyArg_ParseTuple(args, "hhHHO", &adr_type, &data_type, &start_num, &end_num, &data_list)) {
+        return NULL;
+    }
+
+    // Validate input data list
+    if (!PyList_Check(data_list) && !PyTuple_Check(data_list)) {
+        PyErr_SetString(PyExc_TypeError, "Data argument must be a list or tuple");
+        return NULL;
+    }
+
+    Py_ssize_t data_count_py = PySequence_Size(data_list);
+    unsigned short data_count = end_num - start_num + 1;
+
+    if (data_count_py != data_count) {
+         PyErr_Format(PyExc_ValueError, "Data list size (%zd) does not match the specified range size (%u)", data_count_py, data_count);
+         return NULL;
+    }
+
+    // Calculate length based on data type and range
+    unsigned short length;
+    size_t element_size;
+
+    switch (data_type) {
+        case 0: // Byte type
+            length = 8 + data_count;
+            element_size = sizeof(char);
+            break;
+        case 1: // Word type
+            length = 8 + (data_count * 2);
+            element_size = sizeof(short);
+            break;
+        case 2: // Long type
+            length = 8 + (data_count * 4);
+            element_size = sizeof(long);
+            break;
+        case 4: // Float type (32-bit)
+            length = 8 + (data_count * 4);
+            element_size = sizeof(float);
+            break;
+        case 5: // Double type (64-bit)
+            length = 8 + (data_count * 8);
+            element_size = sizeof(double);
+            break;
+        default:
+            PyErr_SetString(PyExc_ValueError, "Invalid data_type");
+            return NULL;
+    }
+
+    // Allocate memory for IODBPMC structure
+    IODBPMC* buf = (IODBPMC*)malloc(length);
+    if (!buf) {
+        PyErr_SetString(PyExc_MemoryError, "Failed to allocate memory for PMC data");
+        return NULL;
+    }
+    memset(buf, 0, length); // Initialize buffer
+
+    // Populate the buffer with data from the Python list
+    buf->type_a = adr_type;
+    buf->type_d = data_type;
+    buf->datano_s = start_num;
+    buf->datano_e = end_num;
+
+    for (unsigned short i = 0; i < data_count; i++) {
+        PyObject* item = PySequence_GetItem(data_list, i);
+        if (!item) {
+            free(buf);
+            // Error already set by PySequence_GetItem
+            return NULL;
+        }
+
+        long long_val;
+        double double_val;
+
+        switch (data_type) {
+            case 0: // Byte type
+                if (!PyLong_Check(item)) { Py_DECREF(item); free(buf); PyErr_SetString(PyExc_TypeError, "Expected int for byte type"); return NULL; }
+                long_val = PyLong_AsLong(item);
+                if (long_val < 0 || long_val > 255) { Py_DECREF(item); free(buf); PyErr_SetString(PyExc_ValueError, "Byte value out of range (0-255)"); return NULL; }
+                buf->u.cdata[i] = (char)long_val;
+                break;
+            case 1: // Word type
+                if (!PyLong_Check(item)) { Py_DECREF(item); free(buf); PyErr_SetString(PyExc_TypeError, "Expected int for word type"); return NULL; }
+                long_val = PyLong_AsLong(item);
+                 // Check range for short if necessary, depends on signed/unsigned nature of PMC WORD
+                // Assuming signed short for now: SHRT_MIN to SHRT_MAX
+                if (long_val < SHRT_MIN || long_val > SHRT_MAX) { Py_DECREF(item); free(buf); PyErr_SetString(PyExc_ValueError, "Word value out of range for short"); return NULL; }
+                buf->u.idata[i] = (short)long_val;
+                break;
+            case 2: // Long type
+                if (!PyLong_Check(item)) { Py_DECREF(item); free(buf); PyErr_SetString(PyExc_TypeError, "Expected int for long type"); return NULL; }
+                long_val = PyLong_AsLong(item);
+                // Check range for long if necessary: LONG_MIN to LONG_MAX
+                 if (long_val < LONG_MIN || long_val > LONG_MAX) { Py_DECREF(item); free(buf); PyErr_SetString(PyExc_ValueError, "Long value out of range for long"); return NULL; }
+                buf->u.ldata[i] = (long)long_val;
+                break;
+            case 4: // Float type
+                if (!PyFloat_Check(item) && !PyLong_Check(item)) { Py_DECREF(item); free(buf); PyErr_SetString(PyExc_TypeError, "Expected float or int for float type"); return NULL; }
+                double_val = PyFloat_AsDouble(item);
+                if (PyErr_Occurred()) { Py_DECREF(item); free(buf); return NULL; } // Handle conversion error
+                buf->u.fdata[i] = (float)double_val;
+                break;
+            case 5: // Double type
+                 if (!PyFloat_Check(item) && !PyLong_Check(item)) { Py_DECREF(item); free(buf); PyErr_SetString(PyExc_TypeError, "Expected float or int for double type"); return NULL; }
+                double_val = PyFloat_AsDouble(item);
+                 if (PyErr_Occurred()) { Py_DECREF(item); free(buf); return NULL; } // Handle conversion error
+                buf->u.dfdata[i] = double_val;
+                break;
+        }
+        Py_DECREF(item); // Decrement reference count for the item
+    }
+
+    // Write PMC data
+    int ret = pmc_wrpmcrng(self->libh, length, buf);
+    free(buf); // Free memory after the call
+
+    if (ret != EW_OK) {
+        PyErr_Format(PyExc_RuntimeError, "Failed to write PMC data: %d", ret);
+        return NULL;
+    }
+
+    Py_RETURN_NONE; // Indicate success
+}
+
 static PyObject* Context_wrmdiprog(Context* self, PyObject* args) {
     int length;
     const char* command;
@@ -540,6 +671,7 @@ static PyMethodDef Context_methods[] = {
     {"read_spindle", (PyCFunction)Context_read_spindle, METH_NOARGS, "Read spindle information"},
     {"read_pmc", (PyCFunction)Context_read_pmc, METH_VARARGS, "Read PMC data"},
     {"read_pmc_bit", (PyCFunction)Context_read_pmc_bit, METH_VARARGS, "Read PMC bit"},
+    {"write_pmc", (PyCFunction)Context_write_pmc, METH_VARARGS, "Write PMC data"},
     {"read_program_number", (PyCFunction)Context_read_program_number, METH_NOARGS, "Read running and main program numbers"},
     {"read_main_program_path", (PyCFunction)Context_read_main_program_path, METH_NOARGS, "Read current main program path"},
     {"select_main_program", (PyCFunction)Context_select_main_program, METH_VARARGS, "Select the main program by path"},
