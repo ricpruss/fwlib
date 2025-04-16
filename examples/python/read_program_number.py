@@ -38,6 +38,13 @@ def main():
                 print_dict("Program Information", program_info)
             except Exception as e:
                 print(f"\nError reading program number: {e}")
+
+            # Read main program path
+            try:
+                main_program_path_info = cnc.read_main_program_path()
+                print(f"\nMain Program Path: {main_program_path_info}")
+            except Exception as e:
+                print(f"\nError reading main program path: {e}")
                 
 
     except KeyboardInterrupt:

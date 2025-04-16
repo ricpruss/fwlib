@@ -464,6 +464,27 @@ static PyObject* Context_read_program_number(Context* self, PyObject* Py_UNUSED(
     return dict;
 }
 
+static PyObject* Context_read_main_program_path(Context* self, PyObject* Py_UNUSED(ignored)) {
+    // ODBMAIN struct indicates max path size is 256
+    char path_buffer[256]; 
+    int ret;
+
+    memset(path_buffer, 0, sizeof(path_buffer)); // Zero out the buffer
+
+    // cnc_pdf_rdmain expects a char* buffer, not an ODBMAIN struct pointer
+    ret = cnc_pdf_rdmain(self->libh, path_buffer);
+    if (ret != EW_OK) {
+        PyErr_Format(PyExc_RuntimeError, "Failed to read main program path: %d", ret);
+        return NULL;
+    }
+
+    // Ensure null termination just in case, though memset should handle it.
+    path_buffer[sizeof(path_buffer) - 1] = '\0';
+
+    // Return just the path string
+    return PyUnicode_FromString(path_buffer);
+}
+
 static PyMethodDef Context_methods[] = {
     {"read_id", (PyCFunction)Context_read_id, METH_NOARGS, "Read CNC ID"},
     {"read_status", (PyCFunction)Context_read_status, METH_NOARGS, "Read CNC status"},
@@ -472,6 +493,7 @@ static PyMethodDef Context_methods[] = {
     {"read_pmc", (PyCFunction)Context_read_pmc, METH_VARARGS, "Read PMC data"},
     {"read_pmc_bit", (PyCFunction)Context_read_pmc_bit, METH_VARARGS, "Read PMC bit"},
     {"read_program_number", (PyCFunction)Context_read_program_number, METH_NOARGS, "Read running and main program numbers"},
+    {"read_main_program_path", (PyCFunction)Context_read_main_program_path, METH_NOARGS, "Read current main program path"},
     {"wrmdiprog", (PyCFunction)Context_wrmdiprog, METH_VARARGS, "Write MDI program"},
     {"wrjogmdi", (PyCFunction)Context_wrjogmdi, METH_VARARGS, "Write JOG MDI command"},
     {"set_mode", (PyCFunction)Context_set_mode, METH_VARARGS, "Set operation mode (mdi/auto/jog)"},
