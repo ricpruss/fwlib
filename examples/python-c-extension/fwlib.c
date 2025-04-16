@@ -485,6 +485,54 @@ static PyObject* Context_read_main_program_path(Context* self, PyObject* Py_UNUS
     return PyUnicode_FromString(path_buffer);
 }
 
+static PyObject* Context_select_main_program(Context* self, PyObject* args) {
+    const char* path;
+    int ret;
+
+    // Expect a single string argument for the path
+    if (!PyArg_ParseTuple(args, "s", &path)) {
+        return NULL; // Error parsing arguments
+    }
+
+    ret = cnc_pdf_slctmain(self->libh, (char*)path); // Cast needed as API expects char*
+    if (ret != EW_OK) {
+        PyErr_Format(PyExc_RuntimeError, "Failed to select main program '%s': %d", path, ret);
+        return NULL;
+    }
+
+    Py_RETURN_NONE; // Indicate success
+}
+
+static PyObject* Context_get_detailed_error(Context* self, PyObject* Py_UNUSED(ignored)) {
+    ODBERR err_info;
+    int ret;
+
+    memset(&err_info, 0, sizeof(ODBERR));
+
+    // Call the FOCAS function to get detailed error info
+    ret = cnc_getdtailerr(self->libh, &err_info);
+    if (ret != EW_OK) {
+        // This function itself failed, perhaps invalid handle or communication issue
+        PyErr_Format(PyExc_RuntimeError, "Failed to execute cnc_getdtailerr: %d", ret);
+        return NULL;
+    }
+
+    // Create a dictionary to return the detailed error info
+    PyObject* dict = PyDict_New();
+    if (!dict) return NULL; // Memory allocation failed
+
+    PyDict_SetItemString(dict, "detail_error_code", PyLong_FromLong(err_info.err_no));
+    PyDict_SetItemString(dict, "detail_error_data", PyLong_FromLong(err_info.err_dtno));
+
+    // Check for errors during dictionary population
+    if (PyErr_Occurred()) {
+        Py_DECREF(dict);
+        return NULL;
+    }
+
+    return dict;
+}
+
 static PyMethodDef Context_methods[] = {
     {"read_id", (PyCFunction)Context_read_id, METH_NOARGS, "Read CNC ID"},
     {"read_status", (PyCFunction)Context_read_status, METH_NOARGS, "Read CNC status"},
@@ -494,6 +542,8 @@ static PyMethodDef Context_methods[] = {
     {"read_pmc_bit", (PyCFunction)Context_read_pmc_bit, METH_VARARGS, "Read PMC bit"},
     {"read_program_number", (PyCFunction)Context_read_program_number, METH_NOARGS, "Read running and main program numbers"},
     {"read_main_program_path", (PyCFunction)Context_read_main_program_path, METH_NOARGS, "Read current main program path"},
+    {"select_main_program", (PyCFunction)Context_select_main_program, METH_VARARGS, "Select the main program by path"},
+    {"get_detailed_error", (PyCFunction)Context_get_detailed_error, METH_NOARGS, "Get detailed error info for the last failed operation"},
     {"wrmdiprog", (PyCFunction)Context_wrmdiprog, METH_VARARGS, "Write MDI program"},
     {"wrjogmdi", (PyCFunction)Context_wrjogmdi, METH_VARARGS, "Write JOG MDI command"},
     {"set_mode", (PyCFunction)Context_set_mode, METH_VARARGS, "Set operation mode (mdi/auto/jog)"},
