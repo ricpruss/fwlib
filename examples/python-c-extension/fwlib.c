@@ -437,6 +437,33 @@ static PyObject* Context_cycle_start(Context* self, PyObject* Py_UNUSED(ignored)
     Py_RETURN_NONE;
 }
 
+static PyObject* Context_read_program_number(Context* self, PyObject* Py_UNUSED(ignored)) {
+    ODBPRO prog_num; // Use the typedef ODBPRO which handles ONO8D macro
+    int ret;
+
+    memset(&prog_num, 0, sizeof(ODBPRO));
+
+    ret = cnc_rdprgnum(self->libh, &prog_num);
+    if (ret != EW_OK) {
+        PyErr_Format(PyExc_RuntimeError, "Failed to read program number: %d", ret);
+        return NULL;
+    }
+
+    PyObject* dict = PyDict_New();
+    if (!dict) return NULL;
+
+    PyDict_SetItemString(dict, "running_program", PyLong_FromLong(prog_num.data));
+    PyDict_SetItemString(dict, "main_program", PyLong_FromLong(prog_num.mdata));
+
+    // Check PyDict_SetItemString errors (though unlikely for PyLong_FromLong)
+    if (PyErr_Occurred()) {
+        Py_DECREF(dict);
+        return NULL;
+    }
+
+    return dict;
+}
+
 static PyMethodDef Context_methods[] = {
     {"read_id", (PyCFunction)Context_read_id, METH_NOARGS, "Read CNC ID"},
     {"read_status", (PyCFunction)Context_read_status, METH_NOARGS, "Read CNC status"},
@@ -444,6 +471,7 @@ static PyMethodDef Context_methods[] = {
     {"read_spindle", (PyCFunction)Context_read_spindle, METH_NOARGS, "Read spindle information"},
     {"read_pmc", (PyCFunction)Context_read_pmc, METH_VARARGS, "Read PMC data"},
     {"read_pmc_bit", (PyCFunction)Context_read_pmc_bit, METH_VARARGS, "Read PMC bit"},
+    {"read_program_number", (PyCFunction)Context_read_program_number, METH_NOARGS, "Read running and main program numbers"},
     {"wrmdiprog", (PyCFunction)Context_wrmdiprog, METH_VARARGS, "Write MDI program"},
     {"wrjogmdi", (PyCFunction)Context_wrjogmdi, METH_VARARGS, "Write JOG MDI command"},
     {"set_mode", (PyCFunction)Context_set_mode, METH_VARARGS, "Set operation mode (mdi/auto/jog)"},
