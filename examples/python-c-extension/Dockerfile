@@ -1,28 +1,50 @@
-from python as builder
+FROM --platform=linux/amd64 python:3.9-slim as builder
 
-copy libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/
-run ln -s /usr/local/lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/libfwlib32.so && \
+WORKDIR /usr/src/fwlib-python-c-extension
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the FANUC library
+COPY libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/
+RUN ln -s /usr/local/lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/libfwlib32.so && \
     ln -s /usr/local/lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/libfwlib32.so.1 && \
     ldconfig
 
-run python -m pip install setuptools
+# Install Python build tools
+RUN pip install --no-cache-dir setuptools wheel
 
-workdir /usr/src/fwlib-python-c-extension
-copy ./examples/python-c-extension/fwlib.c ./examples/python-c-extension/setup.py ./fwlib32.h ./
+# Copy the C extension source files
+COPY ./examples/python-c-extension/fwlib.c ./examples/python-c-extension/setup.py ./fwlib32.h ./
 
-run python setup.py bdist_wheel
+# Build the C extension
+RUN python3 setup.py bdist_wheel
 
-from python:slim
+FROM --platform=linux/amd64 python:3.9-slim
 
-copy libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/
-run ln -s /usr/local/lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/libfwlib32.so && \
+WORKDIR /app
+
+# Copy the FANUC library
+COPY libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/
+RUN ln -s /usr/local/lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/libfwlib32.so && \
     ln -s /usr/local/lib/libfwlib32-linux-x64.so.1.0.5 /usr/local/lib/libfwlib32.so.1 && \
     ldconfig
 
-workdir /app
+# Install the C extension
+COPY --from=builder /usr/src/fwlib-python-c-extension/dist/*.whl .
+RUN pip install --no-cache-dir /app/*.whl && rm /app/*.whl
 
-copy --from=builder /usr/src/fwlib-python-c-extension/dist/*.whl /app/
+# Create a directory for Python scripts
+RUN mkdir -p /app/python
 
-run pip install /app/*.whl && rm /app/*.whl
+# Set the working directory to the Python scripts directory
+WORKDIR /app/python
 
-copy ./examples/python-c-extension/main.py ./
+# The Python directory will be mounted at runtime
+# Use the following command to run the container:
+# docker run --rm -it --platform=linux/amd64 -v $(pwd)/examples/python:/app/python fwlib-status python3 scripts/send_mcode.py
+
+CMD ["python3", "scripts/send_mcode.py"]
